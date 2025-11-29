@@ -164,7 +164,7 @@ def get_all_drivers_details():
 
 # --- واجهة التطبيق ---
 st.set_page_config(page_title="نظام إدارة التوصيل", layout="wide", page_icon="jak.png")
-st.title("🚚 نظام رصيد المندوبين")
+st.title("jak.png نظام رصيد المندوبين")
 
 # التأكد من وجود قاعدة البيانات
 init_db()
@@ -212,7 +212,7 @@ else:
     
     # مدخل المسؤول الإداري 
     st.sidebar.divider()
-    with st.sidebar.expander("مدخل المسؤول مدخل المسؤول الإداري"):
+    with st.sidebar.expander("مدخل المسؤول الإداري"):
         admin_key_input = st.text_input("أدخل المفتاح السري", type="password")
         if st.button("دخول المسؤول"):
             if admin_key_input == ADMIN_KEY:
