@@ -11,7 +11,7 @@ DB_NAME = "delivery_app.db"
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # جدول المندوبين (تم تحديث الحقول)
+    # جدول المندوبين (مع جميع الحقول المطلوبة)
     c.execute('''CREATE TABLE IF NOT EXISTS drivers
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   driver_id TEXT UNIQUE, 
@@ -21,7 +21,7 @@ def init_db():
                   notes TEXT,
                   is_active BOOLEAN,
                   balance REAL)''')
-    # جدول السجل (الحركات)
+    # جدول السجل
     c.execute('''CREATE TABLE IF NOT EXISTS transactions
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   driver_name TEXT, 
@@ -89,10 +89,10 @@ def update_balance(driver_id, amount, trans_type):
     new_balance = current_balance + amount
     c.execute("UPDATE drivers SET balance=? WHERE driver_id=?", (new_balance, driver_id))
     
-    # 2. تسجيل الحركة
+    # 2. تسجيل الحركة: يتم حفظ اسم المندوب وترقيمه لتسهيل التقارير
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute("INSERT INTO transactions (driver_name, amount, type, timestamp) VALUES (?, ?, ?, ?)",
-              (f"{name} ({driver_id})", amount, trans_type, timestamp))
+              (f"{name} (ID:{driver_id})", amount, trans_type, timestamp))
     
     conn.commit()
     conn.close()
@@ -102,7 +102,7 @@ def get_history(driver_id=None):
     conn = sqlite3.connect(DB_NAME)
     if driver_id:
         # البحث بواسطة جزء من اسم أو ID
-        query = f"SELECT type as 'العملية', amount as 'المبلغ', timestamp as 'التوقيت' FROM transactions WHERE driver_name LIKE '%{driver_id}%' ORDER BY id DESC"
+        query = f"SELECT type as 'العملية', amount as 'المبلغ', timestamp as 'التوقيت' FROM transactions WHERE driver_name LIKE '%ID:{driver_id}%' ORDER BY id DESC"
     else:
         # عرض الكل
         query = "SELECT driver_name as 'المندوب', type as 'العملية', amount as 'المبلغ', timestamp as 'التوقيت' FROM transactions ORDER BY id DESC"
@@ -120,75 +120,94 @@ def get_all_drivers_details():
     
 # --- واجهة التطبيق ---
 st.set_page_config(page_title="نظام إدارة التوصيل", layout="wide", page_icon="🚚")
-st.title("🚚 نظام رصيد المندوبين (إدارة شاملة)")
+st.title("🚚 نظام رصيد المندوبين")
 
 # التأكد من وجود قاعدة البيانات
 init_db()
 
-# القائمة الجانبية (إدارة)
+# تهيئة حالة الجلسة (للتحقق من تسجيل دخول المندوب)
+if 'logged_in_driver_id' not in st.session_state:
+    st.session_state['logged_in_driver_id'] = None
+
+# ----------------------------------------------------------------------------------
+# القائمة الجانبية ومنطق الدخول
+# ----------------------------------------------------------------------------------
+
 st.sidebar.header("لوحة التحكم")
-menu = st.sidebar.radio("القائمة", ["واجهة العمليات", "إدارة المندوبين (إضافة/تعديل)", "التقارير وسجل العمليات"])
+menu_options = ["واجهة المندوب", "واجهة العمليات (الإدارة)", "إدارة المندوبين (إضافة/تعديل)", "التقارير وسجل العمليات"]
 
-if menu == "إدارة المندوبين (إضافة/تعديل)":
-    st.header("إدارة بيانات المندوبين")
-    tab_add, tab_edit, tab_view = st.tabs(["إضافة مندوب", "تعديل بيانات", "عرض الكل"])
+if st.session_state['logged_in_driver_id']:
+    driver_id = st.session_state['logged_in_driver_id']
+    driver_info = get_driver_info(driver_id)
+    if driver_info:
+        st.sidebar.markdown(f"**مرحباً، {driver_info['name']}**")
+        st.sidebar.button("خروج (Logout)", on_click=lambda: st.session_state.update(logged_in_driver_id=None))
+        current_menu = "واجهة المندوب"
+    else:
+        st.session_state.logged_in_driver_id = None # مسح الجلسة إذا كان الـ ID غير موجود
+        current_menu = st.sidebar.radio("القائمة", menu_options, index=0)
+else:
+    current_menu = st.sidebar.radio("القائمة", menu_options, index=0)
+
+# ----------------------------------------------------------------------------------
+# 1. واجهة المندوب (عرض الرصيد والسجل فقط)
+# ----------------------------------------------------------------------------------
+if current_menu == "واجهة المندوب":
+    if st.session_state['logged_in_driver_id']:
+        driver_id = st.session_state['logged_in_driver_id']
+        driver_data = get_driver_info(driver_id)
+        
+        if driver_data and driver_data['is_active']:
+            st.header(f"أهلاً بك يا {driver_data['name']}!")
+            
+            # عرض الرصيد
+            st.markdown("### رصيدك الحالي")
+            st.metric(label="الرصيد المتوفر", 
+                      value=f"{driver_data['balance']} أوقية", 
+                      delta_color="off")
+
+            st.divider()
+            
+            # عرض السجل الخاص به
+            st.markdown("### سجل حركاتك الأخيرة")
+            history_df = get_history(driver_id)
+            if not history_df.empty:
+                st.dataframe(history_df, use_container_width=True)
+            else:
+                st.info("لا توجد حركات مسجلة لك بعد.")
+        elif driver_data and not driver_data['is_active']:
+            st.error("عفواً، حسابك معطل. يرجى مراجعة الإدارة.")
+        else:
+            st.error("حدث خطأ في جلب البيانات.")
+            st.session_state['logged_in_driver_id'] = None # إعادة التعيين
     
-    with tab_add:
-        st.subheader("تسجيل مندوب جديد")
-        with st.form("new_driver_form"):
-            col1_add, col2_add = st.columns(2)
-            with col1_add:
-                new_driver_id = st.text_input("ترقيم المندوب (ID)", help="يجب أن يكون رقماً فريداً أو كوداً مميزاً")
-                new_name = st.text_input("اسم المندوب الكامل")
-                new_bike_plate = st.text_input("رقم لوحة الدراجة")
-            with col2_add:
-                new_whatsapp = st.text_input("رقم الواتساب (للتواصل)")
-                new_notes = st.text_area("ملاحظات إضافية")
-                new_is_active = st.checkbox("حساب مفعل؟", value=True, help="عطّل هذا الخيار لمنع المندوب من إجراء عمليات توصيل أو شحن.")
+    else:
+        # واجهة تسجيل الدخول للمندوب
+        st.header("تسجيل الدخول للمندوبين")
+        driver_id_input = st.text_input("أدخل ترقيمك (Driver ID)")
+        
+        def attempt_login():
+            if not driver_id_input:
+                st.error("الرجاء إدخال ترقيمك.")
+                return
             
-            submitted = st.form_submit_button("إضافة المندوب", type="primary")
-            if submitted:
-                if new_driver_id and new_name:
-                    add_driver(new_driver_id, new_name, new_bike_plate, new_whatsapp, new_notes, new_is_active)
+            info = get_driver_info(driver_id_input)
+            if info:
+                if info['is_active']:
+                    st.session_state['logged_in_driver_id'] = driver_id_input
+                    st.success(f"تم تسجيل الدخول بنجاح! مرحباً بك يا {info['name']}.")
+                    st.rerun()
                 else:
-                    st.error("يرجى إدخال ترقيم المندوب والاسم على الأقل.")
+                    st.error("عفواً، حسابك غير مفعل.")
+            else:
+                st.error("ترقيم المندوب غير صحيح.")
 
-    with tab_edit:
-        st.subheader("تعديل بيانات مندوب حالي")
-        all_drivers = get_drivers(active_only=False)
-        if not all_drivers.empty:
-            driver_options = all_drivers.set_index('driver_id')['display_name'].to_dict()
-            selected_id = st.selectbox("اختر المندوب لتعديل بياناته:", options=list(driver_options.keys()), format_func=lambda x: driver_options[x])
-            
-            if selected_id:
-                info_db = sqlite3.connect(DB_NAME).cursor().execute("SELECT name, bike_plate, whatsapp, notes, is_active FROM drivers WHERE driver_id=?", (selected_id,)).fetchone()
-                
-                with st.form("edit_driver_form"):
-                    col1_edit, col2_edit = st.columns(2)
-                    with col1_edit:
-                        edit_name = st.text_input("الاسم", value=info_db[0])
-                        edit_bike_plate = st.text_input("رقم لوحة الدراجة", value=info_db[1] if info_db[1] else "")
-                        edit_whatsapp = st.text_input("رقم الواتساب", value=info_db[2] if info_db[2] else "")
-                    with col2_edit:
-                        edit_notes = st.text_area("ملاحظات إضافية", value=info_db[3] if info_db[3] else "")
-                        edit_is_active = st.checkbox("حساب مفعل؟", value=info_db[4], help="عطّل لمنع إجراء أي عمليات.")
-                    
-                    submitted_edit = st.form_submit_button("حفظ التعديلات", type="primary")
-                    if submitted_edit:
-                        update_driver_details(selected_id, edit_name, edit_bike_plate, edit_whatsapp, edit_notes, edit_is_active)
-                        st.rerun()
-        else:
-            st.info("لا يوجد مندوبين مسجلين بعد.")
+        st.button("تسجيل الدخول", on_click=attempt_login, type="primary")
 
-    with tab_view:
-        st.subheader("عرض بيانات جميع المندوبين")
-        all_details = get_all_drivers_details()
-        if not all_details.empty:
-            st.dataframe(all_details, use_container_width=True)
-        else:
-            st.info("لا توجد بيانات لعرضها.")
-
-elif menu == "واجهة العمليات":
+# ----------------------------------------------------------------------------------
+# 2. واجهة العمليات (الإدارة) - شحن/خصم
+# ----------------------------------------------------------------------------------
+elif current_menu == "واجهة العمليات (الإدارة)":
     st.header("تسجيل العمليات (شحن/خصم)")
     
     active_drivers_df = get_drivers(active_only=True)
@@ -224,7 +243,75 @@ elif menu == "واجهة العمليات":
                 st.success(f"تم الشحن بنجاح! الرصيد الجديد: {new_bal} أوقية")
                 st.rerun()
 
-elif menu == "التقارير وسجل العمليات":
+# ----------------------------------------------------------------------------------
+# 3. إدارة المندوبين (إضافة/تعديل)
+# ----------------------------------------------------------------------------------
+elif current_menu == "إدارة المندوبين (إضافة/تعديل)":
+    st.header("إدارة بيانات المندوبين")
+    tab_add, tab_edit, tab_view = st.tabs(["إضافة مندوب", "تعديل بيانات", "عرض الكل"])
+    
+    with tab_add:
+        st.subheader("تسجيل مندوب جديد")
+        with st.form("new_driver_form"):
+            col1_add, col2_add = st.columns(2)
+            with col1_add:
+                new_driver_id = st.text_input("ترقيم المندوب (ID)", help="يجب أن يكون رقماً فريداً أو كوداً مميزاً")
+                new_name = st.text_input("اسم المندوب الكامل")
+                new_bike_plate = st.text_input("رقم لوحة الدراجة")
+            with col2_add:
+                new_whatsapp = st.text_input("رقم الواتساب (للتواصل)")
+                new_notes = st.text_area("ملاحظات إضافية")
+                new_is_active = st.checkbox("حساب مفعل؟", value=True, help="عطّل هذا الخيار لمنع المندوب من إجراء عمليات توصيل أو شحن.")
+            
+            submitted = st.form_submit_button("إضافة المندوب", type="primary")
+            if submitted:
+                if new_driver_id and new_name:
+                    add_driver(new_driver_id, new_name, new_bike_plate, new_whatsapp, new_notes, new_is_active)
+                    st.rerun()
+                else:
+                    st.error("يرجى إدخال ترقيم المندوب والاسم على الأقل.")
+
+    with tab_edit:
+        st.subheader("تعديل بيانات مندوب حالي")
+        all_drivers = get_drivers(active_only=False)
+        if not all_drivers.empty:
+            driver_options = all_drivers.set_index('driver_id')['display_name'].to_dict()
+            selected_id = st.selectbox("اختر المندوب لتعديل بياناته:", options=list(driver_options.keys()), format_func=lambda x: driver_options[x], key="edit_driver_select")
+            
+            if selected_id:
+                conn = sqlite3.connect(DB_NAME)
+                info_db = conn.cursor().execute("SELECT name, bike_plate, whatsapp, notes, is_active FROM drivers WHERE driver_id=?", (selected_id,)).fetchone()
+                conn.close()
+                
+                with st.form("edit_driver_form"):
+                    col1_edit, col2_edit = st.columns(2)
+                    with col1_edit:
+                        edit_name = st.text_input("الاسم", value=info_db[0])
+                        edit_bike_plate = st.text_input("رقم لوحة الدراجة", value=info_db[1] if info_db[1] else "")
+                        edit_whatsapp = st.text_input("رقم الواتساب", value=info_db[2] if info_db[2] else "")
+                    with col2_edit:
+                        edit_notes = st.text_area("ملاحظات إضافية", value=info_db[3] if info_db[3] else "")
+                        edit_is_active = st.checkbox("حساب مفعل؟", value=info_db[4], help="عطّل لمنع إجراء أي عمليات.")
+                    
+                    submitted_edit = st.form_submit_button("حفظ التعديلات", type="primary")
+                    if submitted_edit:
+                        update_driver_details(selected_id, edit_name, edit_bike_plate, edit_whatsapp, edit_notes, edit_is_active)
+                        st.rerun()
+        else:
+            st.info("لا يوجد مندوبين مسجلين بعد.")
+
+    with tab_view:
+        st.subheader("عرض بيانات جميع المندوبين")
+        all_details = get_all_drivers_details()
+        if not all_details.empty:
+            st.dataframe(all_details, use_container_width=True)
+        else:
+            st.info("لا توجد بيانات لعرضها.")
+
+# ----------------------------------------------------------------------------------
+# 4. التقارير وسجل العمليات
+# ----------------------------------------------------------------------------------
+elif current_menu == "التقارير وسجل العمليات":
     st.header("سجل الحركات المالية والتقارير")
     
     # خيار التقرير
