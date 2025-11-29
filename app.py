@@ -8,7 +8,7 @@ import io
 # --- إعدادات التطبيق ---
 DEDUCTION_AMOUNT = 15.0  # المبلغ المخصوم لكل توصيلة (أوقية)
 DB_NAME = "delivery_app.db"
-ADMIN_KEY = "companyadmin" # المفتاح السري للإدارة
+ADMIN_KEY = "jak2831" # المفتاح السري للإدارة
 IMAGE_PATH = "logo.png" # اسم ملف الشعار الثابت
 
 # --- دوال التعامل مع قاعدة البيانات ---
@@ -22,7 +22,23 @@ def init_db():
     conn.commit()
     conn.close()
 
-# 🆕 دالة محدثة لحساب الإجمالي (تم إضافة total_deducted)
+# 🆕 دالة لحساب عدد التوصيلات لكل مندوب
+def get_deliveries_count_per_driver():
+    conn = sqlite3.connect(DB_NAME)
+    # نستخدم دوال SQLite (SUBSTR, INSTR) لاستخراج ID من اسم المندوب المخزن 'Name (ID:XX)'
+    query = """
+    SELECT 
+        SUBSTR(driver_name, INSTR(driver_name, ':')+1, LENGTH(driver_name)-INSTR(driver_name, ':')-1) AS driver_id, 
+        COUNT(*) AS 'عدد التوصيلات'
+    FROM transactions
+    WHERE type='خصم توصيلة'
+    GROUP BY driver_id
+    """
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
+
+# 🆕 دالة محدثة لحساب الإجمالي (تم إضافة total_deliveries)
 def get_totals():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -30,18 +46,20 @@ def get_totals():
     # 1. مجموع الرصيد الحالي لجميع المندوبين
     total_balance = c.execute("SELECT SUM(balance) FROM drivers").fetchone()[0] or 0.0
     
-    # 2. مجموع الشحن (الحركات ذات النوع 'شحن رصيد')
+    # 2. مجموع الشحن
     total_charged = c.execute("SELECT SUM(amount) FROM transactions WHERE type='شحن رصيد'").fetchone()[0] or 0.0
     
-    # 3. مجموع الخصومات (الحركات ذات النوع 'خصم توصيلة'). نستخدم abs لأن القيمة مخزنة سالبة.
+    # 3. مجموع الخصومات (القيمة المطلقة للقيمة السالبة المخزنة)
     total_deducted_negative = c.execute("SELECT SUM(amount) FROM transactions WHERE type='خصم توصيلة'").fetchone()[0] or 0.0
     total_deducted = abs(total_deducted_negative)
     
+    # 4. عدد التوصيلات الإجمالي 🆕
+    total_deliveries = c.execute("SELECT COUNT(*) FROM transactions WHERE type='خصم توصيلة'").fetchone()[0] or 0
+    
     conn.close()
-    return total_balance, total_charged, total_deducted # ⬅️ الآن يتم إرجاع 3 قيم
+    return total_balance, total_charged, total_deducted, total_deliveries # ⬅️ يتم إرجاع 4 قيم
 
-# (بقية الدوال: add_driver, get_drivers, get_driver_info, update_driver_details, update_balance, get_history, get_all_drivers_details... محفوظة بالكامل هنا)
-# لضمان اكتمال الكود، سأدرجها هنا مرة أخرى:
+# --- الدوال المتبقية ---
 
 def add_driver(driver_id, name, bike_plate, whatsapp, notes, is_active):
     conn = sqlite3.connect(DB_NAME)
@@ -111,12 +129,36 @@ def get_history(driver_id=None):
     conn.close()
     return df
 
+# 🆕 دالة محدثة (تمت إضافة عد التوصيلات وتصحيح التسلسل)
 def get_all_drivers_details():
     conn = sqlite3.connect(DB_NAME)
-    df = pd.read_sql_query("SELECT driver_id as 'الترقيم', name as 'الاسم', bike_plate as 'رقم اللوحة', whatsapp as 'واتساب', balance as 'الرصيد', is_active as 'الحالة', notes as 'ملاحظات' FROM drivers", conn)
+    # 1. جلب البيانات الأساسية
+    df = pd.read_sql_query("SELECT driver_id, name as 'الاسم', bike_plate as 'رقم اللوحة', whatsapp as 'واتساب', balance as 'الرصيد', is_active as 'الحالة', notes as 'ملاحظات' FROM drivers", conn)
     conn.close()
+    
+    # 2. إضافة عدد التوصيلات 🆕
+    deliveries_count_df = get_deliveries_count_per_driver()
+    if not deliveries_count_df.empty:
+        # دمج البيانات بناءً على driver_id، وملء القيم الفارغة (للمندوبين الذين لم يقوموا بتوصيلات بعد) بالصفر
+        df = pd.merge(df, deliveries_count_df, on='driver_id', how='left').fillna({'عدد التوصيلات': 0})
+        # تحويل عدد التوصيلات إلى عدد صحيح (integer) بعد التعبئة
+        df['عدد التوصيلات'] = df['عدد التوصيلات'].astype(int)
+    else:
+        df['عدد التوصيلات'] = 0
+        
+    # 3. تعديل عمود الحالة
     df['الحالة'] = df['الحالة'].apply(lambda x: 'مفعل' if x == 1 else 'معطل')
-    return df
+    
+    # 4. تصحيح الترقيم (العد يبدأ من 1) 🆕
+    df.insert(0, 'ت', range(1, 1 + len(df)))
+    
+    # 5. إعادة تسمية العمود
+    df.rename(columns={'driver_id': 'الترقيم'}, inplace=True)
+    
+    # ترتيب الأعمدة للعرض
+    cols = ['ت', 'الترقيم', 'الاسم', 'رقم اللوحة', 'واتساب', 'الرصيد', 'عدد التوصيلات', 'الحالة', 'ملاحظات']
+    
+    return df[cols]
 # --- نهاية الدوال المتبقية ---
 
 
@@ -168,9 +210,9 @@ else:
     # وضع الزائر (Guest)
     current_menu = "واجهة المندوب"
     
-    # مدخل المسؤول السري
+    # مدخل المسؤول الإداري 
     st.sidebar.divider()
-    with st.sidebar.expander("مدخل المسؤول السري"):
+    with st.sidebar.expander("مدخل المسؤول مدخل المسؤول الإداري"):
         admin_key_input = st.text_input("أدخل المفتاح السري", type="password")
         if st.button("دخول المسؤول"):
             if admin_key_input == ADMIN_KEY:
@@ -278,7 +320,7 @@ elif current_menu == "واجهة العمليات (الإدارة)":
                 st.rerun()
 
 # ----------------------------------------------------------------------------------
-# 4. إدارة المندوبين
+# 4. إدارة المندوبين (تم تحديث عرض الكل)
 # ----------------------------------------------------------------------------------
 elif current_menu == "إدارة المندوبين (إضافة/تعديل)":
     st.header("إدارة بيانات المندوبين")
@@ -338,12 +380,13 @@ elif current_menu == "إدارة المندوبين (إضافة/تعديل)":
         st.subheader("عرض بيانات جميع المندوبين")
         all_details = get_all_drivers_details()
         if not all_details.empty:
+            # ⬅️ هذا التقرير الآن يشمل التسلسل (ت) وعدد التوصيلات لكل مندوب
             st.dataframe(all_details, use_container_width=True)
         else:
             st.info("لا توجد بيانات لعرضها.")
 
 # ----------------------------------------------------------------------------------
-# 5. التقارير وسجل العمليات
+# 5. التقارير وسجل العمليات (تم تحديث التقارير الإجمالية)
 # ----------------------------------------------------------------------------------
 elif current_menu == "التقارير وسجل العمليات":
     st.header("سجل الحركات المالية والتقارير")
@@ -352,11 +395,11 @@ elif current_menu == "التقارير وسجل العمليات":
     
     if report_type == "التقارير الإجمالية":
         st.subheader("ملخص إجمالي للنظام")
-        # ⬅️ استلام 3 قيم من الدالة
-        total_balance, total_charged, total_deducted = get_totals()
+        # ⬅️ استلام 4 قيم من الدالة
+        total_balance, total_charged, total_deducted, total_deliveries = get_totals()
         
-        # ⬅️ إنشاء 3 أعمدة للعرض
-        col_total_bal, col_total_charged, col_total_deducted = st.columns(3)
+        # ⬅️ إنشاء 4 أعمدة للعرض
+        col_total_bal, col_total_charged, col_total_deducted, col_total_deliveries = st.columns(4)
         
         with col_total_bal:
             st.metric(label="مجموع الأرصدة الحالية للمندوبين", value=f"{total_balance:.2f} أوقية", delta_color="off")
@@ -366,9 +409,13 @@ elif current_menu == "التقارير وسجل العمليات":
             st.metric(label="إجمالي المبالغ المشحونة", value=f"{total_charged:.2f} أوقية", delta_color="off")
             st.caption("مجموع كل عمليات الشحن التي تمت منذ بدء النظام.")
         
-        with col_total_deducted: # 🆕 الإجمالي الجديد
+        with col_total_deducted:
             st.metric(label="إجمالي المبالغ المخصومة", value=f"{total_deducted:.2f} أوقية", delta_color="off")
             st.caption("مجموع الخصومات التي تمت لتسجيل التوصيلات.")
+
+        with col_total_deliveries: # 🆕 الإجمالي الجديد
+            st.metric(label="عدد التوصيلات الإجمالي", value=f"{total_deliveries}", delta_color="off")
+            st.caption("مجموع عدد التوصيلات الناجحة المسجلة في النظام.")
         
     elif report_type == "سجل جميع العمليات":
         st.subheader("جميع حركات الشحن والخصم")
