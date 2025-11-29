@@ -6,44 +6,21 @@ from datetime import datetime
 # --- إعدادات التطبيق ---
 DEDUCTION_AMOUNT = 15.0  # المبلغ المخصوم لكل توصيلة (أوقية)
 DB_NAME = "delivery_app.db"
+ADMIN_KEY = "companyadmin" # <--- المفتاح السري للإدارة
 
-# --- دوال التعامل مع قاعدة البيانات ---
+# --- دوال التعامل مع قاعدة البيانات (تم الحفاظ عليها) ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # جدول المندوبين (مع جميع الحقول المطلوبة)
     c.execute('''CREATE TABLE IF NOT EXISTS drivers
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  driver_id TEXT UNIQUE, 
-                  name TEXT, 
-                  bike_plate TEXT, 
-                  whatsapp TEXT,
-                  notes TEXT,
-                  is_active BOOLEAN,
-                  balance REAL)''')
-    # جدول السجل
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, driver_id TEXT UNIQUE, name TEXT, bike_plate TEXT, whatsapp TEXT, notes TEXT, is_active BOOLEAN, balance REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS transactions
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  driver_name TEXT, 
-                  amount REAL, 
-                  type TEXT, 
-                  timestamp TEXT)''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, driver_name TEXT, amount REAL, type TEXT, timestamp TEXT)''')
     conn.commit()
     conn.close()
+# (باقي دوال get_drivers, add_driver, update_balance, update_driver_details, get_driver_info, get_history, get_all_drivers_details محفوظة بالكامل هنا)
 
-def add_driver(driver_id, name, bike_plate, whatsapp, notes, is_active):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    try:
-        # الرصيد الأولي 0.0
-        c.execute("INSERT INTO drivers (driver_id, name, bike_plate, whatsapp, notes, is_active, balance) VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                  (driver_id, name, bike_plate, whatsapp, notes, is_active, 0.0))
-        conn.commit()
-        st.success(f"تمت إضافة المندوب '{name}' برقم ID: {driver_id} بنجاح!")
-    except sqlite3.IntegrityError:
-        st.error("رقم الترقيم (ID) هذا موجود مسبقاً. يرجى اختيار رقم آخر.")
-    conn.close()
-
+# دالة مكررة لاستكمال الكود (يجب عليك استبدال هذا المكان بالدوال الفعلية):
 def get_drivers(active_only=True):
     conn = sqlite3.connect(DB_NAME)
     if active_only:
@@ -51,9 +28,9 @@ def get_drivers(active_only=True):
     else:
         df = pd.read_sql_query("SELECT driver_id, name, balance FROM drivers", conn)
     conn.close()
-    # نجمع الاسم والـ ID للعرض في القائمة المنسدلة
     df['display_name'] = df['name'] + ' (ID: ' + df['driver_id'] + ')'
     return df
+# (ملاحظة: لضمان اكتمال الكود، يجب أن تضمن وجود جميع الدوال هنا)
 
 def get_driver_info(driver_id):
     conn = sqlite3.connect(DB_NAME)
@@ -65,6 +42,34 @@ def get_driver_info(driver_id):
         return {"name": result[0], "balance": result[1], "is_active": result[2]}
     return None
 
+def update_balance(driver_id, amount, trans_type):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    info = get_driver_info(driver_id)
+    if not info: return 0.0
+    current_balance = info['balance']
+    name = info['name']
+    new_balance = current_balance + amount
+    c.execute("UPDATE drivers SET balance=? WHERE driver_id=?", (new_balance, driver_id))
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("INSERT INTO transactions (driver_name, amount, type, timestamp) VALUES (?, ?, ?, ?)",
+              (f"{name} (ID:{driver_id})", amount, trans_type, timestamp))
+    conn.commit()
+    conn.close()
+    return new_balance
+
+def add_driver(driver_id, name, bike_plate, whatsapp, notes, is_active):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO drivers (driver_id, name, bike_plate, whatsapp, notes, is_active, balance) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+                  (driver_id, name, bike_plate, whatsapp, notes, is_active, 0.0))
+        conn.commit()
+        st.success(f"تمت إضافة المندوب '{name}' بنجاح!")
+    except sqlite3.IntegrityError:
+        st.error("رقم الترقيم (ID) هذا موجود مسبقاً.")
+    conn.close()
+
 def update_driver_details(driver_id, name, bike_plate, whatsapp, notes, is_active):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -74,39 +79,12 @@ def update_driver_details(driver_id, name, bike_plate, whatsapp, notes, is_activ
     conn.close()
     st.success(f"تم تحديث بيانات المندوب {name} بنجاح.")
 
-def update_balance(driver_id, amount, trans_type):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    
-    # 1. تحديث الرصيد
-    info = get_driver_info(driver_id)
-    if not info:
-        return 0.0
-        
-    current_balance = info['balance']
-    name = info['name']
-    
-    new_balance = current_balance + amount
-    c.execute("UPDATE drivers SET balance=? WHERE driver_id=?", (new_balance, driver_id))
-    
-    # 2. تسجيل الحركة: يتم حفظ اسم المندوب وترقيمه لتسهيل التقارير
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT INTO transactions (driver_name, amount, type, timestamp) VALUES (?, ?, ?, ?)",
-              (f"{name} (ID:{driver_id})", amount, trans_type, timestamp))
-    
-    conn.commit()
-    conn.close()
-    return new_balance
-
 def get_history(driver_id=None):
     conn = sqlite3.connect(DB_NAME)
     if driver_id:
-        # البحث بواسطة جزء من اسم أو ID
         query = f"SELECT type as 'العملية', amount as 'المبلغ', timestamp as 'التوقيت' FROM transactions WHERE driver_name LIKE '%ID:{driver_id}%' ORDER BY id DESC"
     else:
-        # عرض الكل
         query = "SELECT driver_name as 'المندوب', type as 'العملية', amount as 'المبلغ', timestamp as 'التوقيت' FROM transactions ORDER BY id DESC"
-        
     df = pd.read_sql_query(query, conn)
     conn.close()
     return df
@@ -117,7 +95,8 @@ def get_all_drivers_details():
     conn.close()
     df['الحالة'] = df['الحالة'].apply(lambda x: 'مفعل' if x == 1 else 'معطل')
     return df
-    
+# ----------------------------------------------------------------------------------
+
 # --- واجهة التطبيق ---
 st.set_page_config(page_title="نظام إدارة التوصيل", layout="wide", page_icon="🚚")
 st.title("🚚 نظام رصيد المندوبين")
@@ -125,33 +104,58 @@ st.title("🚚 نظام رصيد المندوبين")
 # التأكد من وجود قاعدة البيانات
 init_db()
 
-# تهيئة حالة الجلسة (للتحقق من تسجيل دخول المندوب)
+# تهيئة حالة الجلسة (للتأكد من تسجيل الدخول)
 if 'logged_in_driver_id' not in st.session_state:
     st.session_state['logged_in_driver_id'] = None
+if 'admin_mode' not in st.session_state:
+    st.session_state['admin_mode'] = False
 
 # ----------------------------------------------------------------------------------
-# القائمة الجانبية ومنطق الدخول
+# 1. منطق القائمة الجانبية وفصل الأدوار
 # ----------------------------------------------------------------------------------
 
 st.sidebar.header("لوحة التحكم")
-menu_options = ["واجهة المندوب", "واجهة العمليات (الإدارة)", "إدارة المندوبين (إضافة/تعديل)", "التقارير وسجل العمليات"]
 
-if st.session_state['logged_in_driver_id']:
+if st.session_state['admin_mode']:
+    # وضع المسؤول (Admin) - تظهر له جميع الخيارات
+    st.sidebar.markdown("**وضع المسؤول (ADMIN)**")
+    menu_options = ["واجهة العمليات (الإدارة)", "إدارة المندوبين (إضافة/تعديل)", "التقارير وسجل العمليات", "الخروج من وضع المسؤول"]
+    current_menu = st.sidebar.radio("القائمة", menu_options)
+    if current_menu == "الخروج من وضع المسؤول":
+        st.session_state['admin_mode'] = False
+        st.rerun()
+
+elif st.session_state['logged_in_driver_id']:
+    # وضع المندوب (Driver) - تظهر له واجهة المندوب فقط مع خيار الخروج
     driver_id = st.session_state['logged_in_driver_id']
     driver_info = get_driver_info(driver_id)
     if driver_info:
         st.sidebar.markdown(f"**مرحباً، {driver_info['name']}**")
-        st.sidebar.button("خروج (Logout)", on_click=lambda: st.session_state.update(logged_in_driver_id=None))
+        st.sidebar.button("خروج (Logout)", on_click=lambda: st.session_state.update(logged_in_driver_id=None, admin_mode=False))
         current_menu = "واجهة المندوب"
     else:
-        st.session_state.logged_in_driver_id = None # مسح الجلسة إذا كان الـ ID غير موجود
-        current_menu = st.sidebar.radio("القائمة", menu_options, index=0)
+        st.session_state.logged_in_driver_id = None
+        current_menu = "واجهة المندوب" # يعود لواجهة الدخول
+
 else:
-    current_menu = st.sidebar.radio("القائمة", menu_options, index=0)
+    # وضع الزائر (Guest) - لا تظهر له خيارات سوى الدخول للمندوب و المدخل السري للإدارة
+    current_menu = "واجهة المندوب"
+    
+    # 🤫 مدخل المسؤول السري في الأسفل
+    st.sidebar.divider()
+    with st.sidebar.expander("مدخل المسؤول السري"):
+        admin_key_input = st.text_input("أدخل المفتاح السري", type="password")
+        if st.button("دخول المسؤول"):
+            if admin_key_input == ADMIN_KEY:
+                st.session_state['admin_mode'] = True
+                st.rerun()
+            else:
+                st.error("المفتاح السري غير صحيح.")
 
 # ----------------------------------------------------------------------------------
-# 1. واجهة المندوب (عرض الرصيد والسجل فقط)
+# 2. عرض الواجهات بناءً على الاختيار
 # ----------------------------------------------------------------------------------
+
 if current_menu == "واجهة المندوب":
     if st.session_state['logged_in_driver_id']:
         driver_id = st.session_state['logged_in_driver_id']
@@ -159,30 +163,22 @@ if current_menu == "واجهة المندوب":
         
         if driver_data and driver_data['is_active']:
             st.header(f"أهلاً بك يا {driver_data['name']}!")
-            
-            # عرض الرصيد
             st.markdown("### رصيدك الحالي")
-            st.metric(label="الرصيد المتوفر", 
-                      value=f"{driver_data['balance']} أوقية", 
-                      delta_color="off")
-
+            st.metric(label="الرصيد المتوفر", value=f"{driver_data['balance']} أوقية", delta_color="off")
             st.divider()
-            
-            # عرض السجل الخاص به
             st.markdown("### سجل حركاتك الأخيرة")
             history_df = get_history(driver_id)
             if not history_df.empty:
                 st.dataframe(history_df, use_container_width=True)
             else:
                 st.info("لا توجد حركات مسجلة لك بعد.")
-        elif driver_data and not driver_data['is_active']:
-            st.error("عفواً، حسابك معطل. يرجى مراجعة الإدارة.")
         else:
-            st.error("حدث خطأ في جلب البيانات.")
-            st.session_state['logged_in_driver_id'] = None # إعادة التعيين
+            st.error("عفواً، حسابك معطل أو غير موجود.")
+            st.session_state['logged_in_driver_id'] = None
+            st.rerun() # لإظهار شاشة الدخول مجدداً
     
     else:
-        # واجهة تسجيل الدخول للمندوب
+        # واجهة تسجيل الدخول للمندوب (تظهر للزائر)
         st.header("تسجيل الدخول للمندوبين")
         driver_id_input = st.text_input("أدخل ترقيمك (Driver ID)")
         
@@ -205,11 +201,11 @@ if current_menu == "واجهة المندوب":
         st.button("تسجيل الدخول", on_click=attempt_login, type="primary")
 
 # ----------------------------------------------------------------------------------
-# 2. واجهة العمليات (الإدارة) - شحن/خصم
+# 3. واجهة العمليات (الإدارة) - شحن/خصم (تظهر للمسؤول فقط)
 # ----------------------------------------------------------------------------------
 elif current_menu == "واجهة العمليات (الإدارة)":
     st.header("تسجيل العمليات (شحن/خصم)")
-    
+    # (كود واجهة العمليات بالكامل يوضع هنا)
     active_drivers_df = get_drivers(active_only=True)
     if active_drivers_df.empty:
         st.warning("لا يوجد مندوبون مفعلون حالياً. يرجى تفعيل حسابات من قائمة الإدارة.")
@@ -223,7 +219,6 @@ elif current_menu == "واجهة العمليات (الإدارة)":
         st.markdown(f"**المندوب الحالي:** {info['name']} | **الرصيد الحالي:** **<span style='color:green; font-size: 1.5em;'>{balance} أوقية</span>**", unsafe_allow_html=True)
         st.divider()
         
-        # العمليات
         tab1, tab2 = st.tabs(["✅ إتمام توصيلة", "💰 شحن رصيد"])
         
         with tab1:
@@ -244,10 +239,11 @@ elif current_menu == "واجهة العمليات (الإدارة)":
                 st.rerun()
 
 # ----------------------------------------------------------------------------------
-# 3. إدارة المندوبين (إضافة/تعديل)
+# 4. إدارة المندوبين (إضافة/تعديل) (تظهر للمسؤول فقط)
 # ----------------------------------------------------------------------------------
 elif current_menu == "إدارة المندوبين (إضافة/تعديل)":
     st.header("إدارة بيانات المندوبين")
+    # (كود إدارة المندوبين بالكامل يوضع هنا)
     tab_add, tab_edit, tab_view = st.tabs(["إضافة مندوب", "تعديل بيانات", "عرض الكل"])
     
     with tab_add:
@@ -309,12 +305,11 @@ elif current_menu == "إدارة المندوبين (إضافة/تعديل)":
             st.info("لا توجد بيانات لعرضها.")
 
 # ----------------------------------------------------------------------------------
-# 4. التقارير وسجل العمليات
+# 5. التقارير وسجل العمليات (تظهر للمسؤول فقط)
 # ----------------------------------------------------------------------------------
 elif current_menu == "التقارير وسجل العمليات":
     st.header("سجل الحركات المالية والتقارير")
-    
-    # خيار التقرير
+    # (كود التقارير بالكامل يوضع هنا)
     report_type = st.radio("نوع التقرير", ["سجل جميع العمليات", "سجل مندوب معين"], horizontal=True)
     
     if report_type == "سجل جميع العمليات":
@@ -322,7 +317,6 @@ elif current_menu == "التقارير وسجل العمليات":
         df = get_history(driver_id=None)
         if not df.empty:
             st.dataframe(df, use_container_width=True)
-            # خيار التحميل
             csv = df.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="تحميل السجل كملف CSV",
@@ -344,7 +338,6 @@ elif current_menu == "التقارير وسجل العمليات":
             
             if not df.empty:
                 st.dataframe(df, use_container_width=True)
-                # خيار التحميل
                 csv = df.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="تحميل السجل كملف CSV",
