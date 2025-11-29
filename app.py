@@ -6,7 +6,7 @@ from datetime import datetime
 # --- إعدادات التطبيق ---
 DEDUCTION_AMOUNT = 15.0  # المبلغ المخصوم لكل توصيلة (أوقية)
 DB_NAME = "delivery_app.db"
-ADMIN_KEY = "companyadmin" # المفتاح السري للإدارة
+ADMIN_KEY = "jak2831" # المفتاح السري للإدارة
 
 # --- دوال التعامل مع قاعدة البيانات ---
 def init_db():
@@ -161,9 +161,9 @@ else:
     # وضع الزائر (Guest) - لا تظهر له خيارات سوى الدخول للمندوب و المدخل السري للإدارة
     current_menu = "واجهة المندوب"
     
-    # مدخل المسؤول السري
+    # مدخل المسؤول الإداري
     st.sidebar.divider()
-    with st.sidebar.expander("مدخل المسؤول السري"):
+    with st.sidebar.expander("مدخل المسؤول الإداري"):
         admin_key_input = st.text_input("أدخل المفتاح السري", type="password")
         if st.button("دخول المسؤول"):
             if admin_key_input == ADMIN_KEY:
