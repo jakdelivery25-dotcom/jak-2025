@@ -3,12 +3,12 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 import os
-import io # لإدارة مدخلات الملفات
+import io
 
 # --- إعدادات التطبيق ---
 DEDUCTION_AMOUNT = 15.0  # المبلغ المخصوم لكل توصيلة (أوقية)
 DB_NAME = "delivery_app.db"
-ADMIN_KEY = "jak2831" # المفتاح السري للإدارة
+ADMIN_KEY = "companyadmin" # المفتاح السري للإدارة
 IMAGE_PATH = "logo.png" # اسم ملف الشعار الثابت
 
 # --- دوال التعامل مع قاعدة البيانات ---
@@ -22,13 +22,23 @@ def init_db():
     conn.commit()
     conn.close()
 
+# 🆕 دالة محدثة لحساب الإجمالي (تم إضافة total_deducted)
 def get_totals():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    
+    # 1. مجموع الرصيد الحالي لجميع المندوبين
     total_balance = c.execute("SELECT SUM(balance) FROM drivers").fetchone()[0] or 0.0
+    
+    # 2. مجموع الشحن (الحركات ذات النوع 'شحن رصيد')
     total_charged = c.execute("SELECT SUM(amount) FROM transactions WHERE type='شحن رصيد'").fetchone()[0] or 0.0
+    
+    # 3. مجموع الخصومات (الحركات ذات النوع 'خصم توصيلة'). نستخدم abs لأن القيمة مخزنة سالبة.
+    total_deducted_negative = c.execute("SELECT SUM(amount) FROM transactions WHERE type='خصم توصيلة'").fetchone()[0] or 0.0
+    total_deducted = abs(total_deducted_negative)
+    
     conn.close()
-    return total_balance, total_charged
+    return total_balance, total_charged, total_deducted # ⬅️ الآن يتم إرجاع 3 قيم
 
 # (بقية الدوال: add_driver, get_drivers, get_driver_info, update_driver_details, update_balance, get_history, get_all_drivers_details... محفوظة بالكامل هنا)
 # لضمان اكتمال الكود، سأدرجها هنا مرة أخرى:
@@ -136,7 +146,6 @@ st.sidebar.header("لوحة التحكم")
 if st.session_state['admin_mode']:
     # وضع المسؤول (Admin)
     st.sidebar.markdown("**وضع المسؤول (ADMIN)**")
-    # تم إضافة خيار الإعدادات الجديد هنا
     menu_options = ["واجهة العمليات (الإدارة)", "إدارة المندوبين (إضافة/تعديل)", "التقارير وسجل العمليات", "إعدادات التطبيق (الشعار)", "الخروج من وضع المسؤول"]
     current_menu = st.sidebar.radio("القائمة", menu_options)
     if current_menu == "الخروج من وضع المسؤول":
@@ -159,9 +168,9 @@ else:
     # وضع الزائر (Guest)
     current_menu = "واجهة المندوب"
     
-    # مدخل المسؤول الإداري
+    # مدخل المسؤول السري
     st.sidebar.divider()
-    with st.sidebar.expander("مدخل المسؤول الإداري"):
+    with st.sidebar.expander("مدخل المسؤول السري"):
         admin_key_input = st.text_input("أدخل المفتاح السري", type="password")
         if st.button("دخول المسؤول"):
             if admin_key_input == ADMIN_KEY:
@@ -343,17 +352,23 @@ elif current_menu == "التقارير وسجل العمليات":
     
     if report_type == "التقارير الإجمالية":
         st.subheader("ملخص إجمالي للنظام")
-        total_balance, total_charged = get_totals()
+        # ⬅️ استلام 3 قيم من الدالة
+        total_balance, total_charged, total_deducted = get_totals()
         
-        col_total_bal, col_total_charged = st.columns(2)
+        # ⬅️ إنشاء 3 أعمدة للعرض
+        col_total_bal, col_total_charged, col_total_deducted = st.columns(3)
         
         with col_total_bal:
             st.metric(label="مجموع الأرصدة الحالية للمندوبين", value=f"{total_balance:.2f} أوقية", delta_color="off")
-            st.caption("هذا هو مجموع الرصيد الحالي الموجود في حسابات جميع المندوبين.")
+            st.caption("مجموع الرصيد الحالي الموجود في حسابات جميع المندوبين.")
         
         with col_total_charged:
-            st.metric(label="إجمالي المبالغ المشحونة (تاريخياً)", value=f"{total_charged:.2f} أوقية", delta_color="off")
-            st.caption("هذا هو مجموع كل عمليات الشحن التي تمت منذ بدء النظام.")
+            st.metric(label="إجمالي المبالغ المشحونة", value=f"{total_charged:.2f} أوقية", delta_color="off")
+            st.caption("مجموع كل عمليات الشحن التي تمت منذ بدء النظام.")
+        
+        with col_total_deducted: # 🆕 الإجمالي الجديد
+            st.metric(label="إجمالي المبالغ المخصومة", value=f"{total_deducted:.2f} أوقية", delta_color="off")
+            st.caption("مجموع الخصومات التي تمت لتسجيل التوصيلات.")
         
     elif report_type == "سجل جميع العمليات":
         st.subheader("جميع حركات الشحن والخصم")
@@ -392,7 +407,7 @@ elif current_menu == "التقارير وسجل العمليات":
                 st.info("لا توجد حركات مسجلة لهذا المندوب.")
 
 # ----------------------------------------------------------------------------------
-# 6. إعدادات التطبيق (الشعار) 🆕
+# 6. إعدادات التطبيق (الشعار)
 # ----------------------------------------------------------------------------------
 elif current_menu == "إعدادات التطبيق (الشعار)":
     st.header("تغيير شعار الشركة")
@@ -407,10 +422,8 @@ elif current_menu == "إعدادات التطبيق (الشعار)":
     uploaded_file = st.file_uploader("اختر صورة الشعار (PNG أو JPG)", type=["png", "jpg", "jpeg"])
     
     if uploaded_file is not None:
-        # قراءة بيانات الملف
         image_bytes = uploaded_file.read()
         
-        # حفظ الملف في المسار الثابت (سيتم استبدال الملف القديم)
         try:
             with open(IMAGE_PATH, "wb") as f:
                 f.write(image_bytes)
@@ -418,7 +431,6 @@ elif current_menu == "إعدادات التطبيق (الشعار)":
             st.success("✅ تم رفع وحفظ الشعار الجديد بنجاح!")
             st.info("لتظهر التحديثات بالكامل، قد تحتاج إلى الضغط على خيار آخر في القائمة الجانبية.")
             
-            # معاينة الشعار الجديد بعد الرفع
             st.image(IMAGE_PATH, caption='معاينة الشعار الجديد', width=200)
 
         except Exception as e:
