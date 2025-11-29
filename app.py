@@ -6,7 +6,7 @@ from datetime import datetime
 # --- إعدادات التطبيق ---
 DEDUCTION_AMOUNT = 15.0  # المبلغ المخصوم لكل توصيلة (أوقية)
 DB_NAME = "delivery_app.db"
-ADMIN_KEY = "companyadmin" # <--- المفتاح السري للإدارة
+ADMIN_KEY = "jak2831" # <--- المفتاح السري للإدارة
 
 # --- دوال التعامل مع قاعدة البيانات (تم الحفاظ عليها) ---
 def init_db():
