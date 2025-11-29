@@ -163,8 +163,8 @@ def get_all_drivers_details():
 
 
 # --- واجهة التطبيق ---
-st.set_page_config(page_title="نظام إدارة التوصيل", layout="wide", page_icon="jak.png.png")
-st.title("jak.png.png نظام رصيد المندوبين")
+st.set_page_config(page_title="نظام إدارة التوصيل", layout="wide", page_icon="🚚")
+st.title("🚚 نظام رصيد المندوبين")
 
 # التأكد من وجود قاعدة البيانات
 init_db()
