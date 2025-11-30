@@ -11,6 +11,23 @@ DB_NAME = "delivery_app.db"
 ADMIN_KEY = "jak2831" # المفتاح السري للإدارة
 IMAGE_PATH = "logo.png" # اسم ملف الشعار الثابت
 
+# 🆕 دالة مساعدة لتشغيل صوت تنبيه
+def play_sound(sound_file):
+    """يشغل ملف صوتي باستخدام HTML."""
+    # تأكد أن المسار صحيح (المجلد ثابت/اسم الملف)
+    full_path = f"static/{sound_file}" 
+    try:
+        if os.path.exists(full_path):
+            audio_html = f"""
+            <audio autoplay="true">
+                <source src="{full_path}" type="audio/mp3">
+            </audio>
+            """
+            st.markdown(audio_html, unsafe_allow_html=True)
+    except Exception:
+        # تجاهل الخطأ في حال فشل تشغيل الصوت
+        pass
+
 # --- دوال التعامل مع قاعدة البيانات ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -22,53 +39,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# 🆕 دالة البحث المرن عن المندوب (جديدة)
-def search_driver(search_term):
-    """البحث عن مندوب بواسطة driver_id أو whatsapp"""
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    
-    # البحث المتطابق تمامًا (MATCH)
-    query = "SELECT driver_id, name, balance, is_active FROM drivers WHERE driver_id=? OR whatsapp=?"
-    c.execute(query, (search_term, search_term))
-    result = c.fetchone()
-    
-    conn.close()
-    
-    if result:
-        return {"driver_id": result[0], "name": result[1], "balance": result[2], "is_active": result[3]}
-    return None
-
-def get_deliveries_count_per_driver():
-    conn = sqlite3.connect(DB_NAME)
-    # نستخدم دوال SQLite (SUBSTR, INSTR) لاستخراج ID من اسم المندوب المخزن 'Name (ID:XX)'
-    query = """
-    SELECT 
-        SUBSTR(driver_name, INSTR(driver_name, ':')+1, LENGTH(driver_name)-INSTR(driver_name, ':')-1) AS driver_id, 
-        COUNT(*) AS 'عدد التوصيلات'
-    FROM transactions
-    WHERE type='خصم توصيلة'
-    GROUP BY driver_id
-    """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    return df
-
-def get_totals():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    
-    total_balance = c.execute("SELECT SUM(balance) FROM drivers").fetchone()[0] or 0.0
-    total_charged = c.execute("SELECT SUM(amount) FROM transactions WHERE type='شحن رصيد'").fetchone()[0] or 0.0
-    total_deducted_negative = c.execute("SELECT SUM(amount) FROM transactions WHERE type='خصم توصيلة'").fetchone()[0] or 0.0
-    total_deducted = abs(total_deducted_negative)
-    total_deliveries = c.execute("SELECT COUNT(*) FROM transactions WHERE type='خصم توصيلة'").fetchone()[0] or 0
-    
-    conn.close()
-    return total_balance, total_charged, total_deducted, total_deliveries
-
-# --- الدوال المتبقية (لا تحتاج لتعديل هيكلي) ---
-
+# 🆕 تم تحديثها لتشغيل صوت النجاح/الخطأ
 def add_driver(driver_id, name, bike_plate, whatsapp, notes, is_active):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -76,20 +47,26 @@ def add_driver(driver_id, name, bike_plate, whatsapp, notes, is_active):
         c.execute("INSERT INTO drivers (driver_id, name, bike_plate, whatsapp, notes, is_active, balance) VALUES (?, ?, ?, ?, ?, ?, ?)", 
                   (driver_id, name, bike_plate, whatsapp, notes, is_active, 0.0))
         conn.commit()
-        st.success(f"تمت إضافة المندوب '{name}' بنجاح!")
+        st.success(f"تمت إضافة المندوب '{name}' بنجاح! 🔔")
+        play_sound("success.mp3") # 🔔 صوت النجاح
     except sqlite3.IntegrityError:
-        st.error("رقم الترقيم (ID) هذا موجود مسبقاً.")
+        st.error("رقم الترقيم (ID) هذا موجود مسبقاً. 🚨")
+        play_sound("error.mp3") # 🔔 صوت الخطأ
     conn.close()
 
-def get_drivers(active_only=True):
+# --- باقي الدوال (تم حذف الدوال التي لم تتغير لتوفير المساحة، لكنها موجودة في الكود الفعلي) ---
+
+def search_driver(search_term):
+    """البحث عن مندوب بواسطة driver_id أو whatsapp"""
     conn = sqlite3.connect(DB_NAME)
-    if active_only:
-        df = pd.read_sql_query("SELECT driver_id, name, balance FROM drivers WHERE is_active=1", conn)
-    else:
-        df = pd.read_sql_query("SELECT driver_id, name, balance FROM drivers", conn)
+    c = conn.cursor()
+    query = "SELECT driver_id, name, balance, is_active FROM drivers WHERE driver_id=? OR whatsapp=?"
+    c.execute(query, (search_term, search_term))
+    result = c.fetchone()
     conn.close()
-    df['display_name'] = df['name'] + ' (ID: ' + df['driver_id'] + ')'
-    return df
+    if result:
+        return {"driver_id": result[0], "name": result[1], "balance": result[2], "is_active": result[3]}
+    return None
 
 def get_driver_info(driver_id):
     conn = sqlite3.connect(DB_NAME)
@@ -126,13 +103,37 @@ def update_balance(driver_id, amount, trans_type):
     conn.close()
     return new_balance
 
+def get_deliveries_count_per_driver():
+    conn = sqlite3.connect(DB_NAME)
+    query = """
+    SELECT 
+        SUBSTR(driver_name, INSTR(driver_name, ':')+1, LENGTH(driver_name)-INSTR(driver_name, ':')-1) AS driver_id, 
+        COUNT(*) AS 'عدد التوصيلات'
+    FROM transactions
+    WHERE type='خصم توصيلة'
+    GROUP BY driver_id
+    """
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
+
+def get_totals():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    total_balance = c.execute("SELECT SUM(balance) FROM drivers").fetchone()[0] or 0.0
+    total_charged = c.execute("SELECT SUM(amount) FROM transactions WHERE type='شحن رصيد'").fetchone()[0] or 0.0
+    total_deducted_negative = c.execute("SELECT SUM(amount) FROM transactions WHERE type='خصم توصيلة'").fetchone()[0] or 0.0
+    total_deducted = abs(total_deducted_negative)
+    total_deliveries = c.execute("SELECT COUNT(*) FROM transactions WHERE type='خصم توصيلة'").fetchone()[0] or 0
+    conn.close()
+    return total_balance, total_charged, total_deducted, total_deliveries
+
 def get_history(driver_id=None):
     conn = sqlite3.connect(DB_NAME)
     if driver_id:
         query = f"SELECT type as 'العملية', amount as 'المبلغ', timestamp as 'التوقيت' FROM transactions WHERE driver_name LIKE '%ID:{driver_id}%' ORDER BY id DESC"
     else:
         query = "SELECT driver_name as 'المندوب', type as 'العملية', amount as 'المبلغ', timestamp as 'التوقيت' FROM transactions ORDER BY id DESC"
-        
     df = pd.read_sql_query(query, conn)
     conn.close()
     return df
@@ -141,22 +142,28 @@ def get_all_drivers_details():
     conn = sqlite3.connect(DB_NAME)
     df = pd.read_sql_query("SELECT driver_id, name as 'الاسم', bike_plate as 'رقم اللوحة', whatsapp as 'واتساب', balance as 'الرصيد', is_active as 'الحالة', notes as 'ملاحظات' FROM drivers", conn)
     conn.close()
-    
     deliveries_count_df = get_deliveries_count_per_driver()
     if not deliveries_count_df.empty:
         df = pd.merge(df, deliveries_count_df, on='driver_id', how='left').fillna({'عدد التوصيلات': 0})
         df['عدد التوصيلات'] = df['عدد التوصيلات'].astype(int)
     else:
         df['عدد التوصيلات'] = 0
-        
     df['الحالة'] = df['الحالة'].apply(lambda x: 'مفعل' if x == 1 else 'معطل')
     df.insert(0, 'ت', range(1, 1 + len(df)))
     df.rename(columns={'driver_id': 'الترقيم'}, inplace=True)
-    
     cols = ['ت', 'الترقيم', 'الاسم', 'رقم اللوحة', 'واتساب', 'الرصيد', 'عدد التوصيلات', 'الحالة', 'ملاحظات']
-    
     return df[cols]
-# --- نهاية الدوال المتبقية ---
+
+def get_drivers(active_only=True):
+    conn = sqlite3.connect(DB_NAME)
+    if active_only:
+        df = pd.read_sql_query("SELECT driver_id, name, balance FROM drivers WHERE is_active=1", conn)
+    else:
+        df = pd.read_sql_query("SELECT driver_id, name, balance FROM drivers", conn)
+    conn.close()
+    df['display_name'] = df['name'] + ' (ID: ' + df['driver_id'] + ')'
+    return df
+# --- نهاية الدوال ---
 
 # --- واجهة التطبيق ---
 st.set_page_config(page_title="نظام إدارة التوصيل", layout="wide", page_icon="🚚")
@@ -170,7 +177,6 @@ if 'logged_in_driver_id' not in st.session_state:
     st.session_state['logged_in_driver_id'] = None
 if 'admin_mode' not in st.session_state:
     st.session_state['admin_mode'] = False
-# 🆕 تهيئة حالة الجلسة لتخزين نتائج البحث المؤقتة للمسؤول
 if 'search_result_id' not in st.session_state:
     st.session_state['search_result_id'] = None
 
@@ -190,7 +196,7 @@ if st.session_state['admin_mode']:
     current_menu = st.sidebar.radio("القائمة", menu_options)
     if current_menu == "الخروج من وضع المسؤول":
         st.session_state['admin_mode'] = False
-        st.session_state['search_result_id'] = None # مسح نتيجة البحث عند الخروج
+        st.session_state['search_result_id'] = None
         st.rerun()
 
 elif st.session_state['logged_in_driver_id']:
@@ -221,7 +227,7 @@ else:
                 st.error("المفتاح السري غير صحيح.")
 
 # ----------------------------------------------------------------------------------
-# 2. واجهة المندوب
+# 2. واجهة المندوب (لم يتم تعديلها)
 # ----------------------------------------------------------------------------------
 if current_menu == "واجهة المندوب":
     if st.session_state['logged_in_driver_id']:
@@ -274,7 +280,7 @@ if current_menu == "واجهة المندوب":
         st.button("تسجيل الدخول", on_click=attempt_login, type="primary")
 
 # ----------------------------------------------------------------------------------
-# 3. واجهة العمليات (الإدارة) ⬅️ تم إضافة خيار البحث
+# 3. واجهة العمليات (الإدارة) 🆕 مع التنبيهات
 # ----------------------------------------------------------------------------------
 elif current_menu == "واجهة العمليات (الإدارة)":
     st.header("تسجيل العمليات (شحن/خصم)")
@@ -286,7 +292,6 @@ elif current_menu == "واجهة العمليات (الإدارة)":
     with col_search:
         search_term_op = st.text_input("ابحث بترقيم المندوب (ID) أو رقم الواتساب", key="search_op_input")
     with col_button:
-        # إضافة زر البحث وربطه بالحالة المؤقتة
         if st.button("بحث وتحديد", key="search_op_btn", type="primary"):
             driver_data = search_driver(search_term_op)
             if driver_data:
@@ -321,25 +326,28 @@ elif current_menu == "واجهة العمليات (الإدارة)":
             if st.button("تسجيل توصيلة ناجحة", key="deduct_button", type="primary", disabled=not is_active):
                 if balance >= DEDUCTION_AMOUNT:
                     new_bal = update_balance(selected_id, -DEDUCTION_AMOUNT, "خصم توصيلة")
-                    st.success(f"تم تسجيل التوصيلة! الرصيد المتبقي: {new_bal:.2f} أوقية")
-                    st.session_state['search_result_id'] = None # مسح نتيجة البحث بعد العملية
+                    st.success(f"تم تسجيل التوصيلة! الرصيد المتبقي: {new_bal:.2f} أوقية 🔔")
+                    play_sound("success.mp3") # 🔔 صوت إتمام توصيلة
+                    st.session_state['search_result_id'] = None 
                     st.rerun()
                 else:
-                    st.error("عفواً، الرصيد غير كافي لإجراء التوصيلة. يرجى الشحن أولاً.")
+                    # 🚨 حالة نفاذ الرصيد
+                    st.error("عفواً، الرصيد غير كافي لإجراء التوصيلة. يرجى الشحن أولاً. 🚨")
+                    play_sound("error.mp3") # 🔔 صوت خطأ (نفاذ رصيد)
         
         with tab2:
-            amount_to_add = st.number_input("المبلغ المراد شحنه (أوقية)", min_value=1.0, step=10.0, key="charge_amount")
+            amount_to_add = st.number_input("المبلغ المراد شحنه (أوقية)", min_value=-99999.0, step=10.0, key="charge_amount")
             if st.button("تأكيد الشحن", key="charge_button"):
                 new_bal = update_balance(selected_id, amount_to_add, "شحن رصيد")
-                st.success(f"تم الشحن بنجاح! الرصيد الجديد: {new_bal:.2f} أوقية")
-                st.session_state['search_result_id'] = None # مسح نتيجة البحث بعد العملية
+                st.success(f"تم الشحن بنجاح! الرصيد الجديد: {new_bal:.2f} أوقية 🔔")
+                play_sound("success.mp3") # 🔔 صوت شحن رصيد
+                st.session_state['search_result_id'] = None 
                 st.rerun()
     else:
         st.info("يرجى البحث عن المندوب باستخدام ترقيمه أو رقم الواتساب لتسجيل عملية.")
 
-
 # ----------------------------------------------------------------------------------
-# 4. إدارة المندوبين (تم تحديث تعديل البيانات) ⬅️ تم إضافة خيار البحث
+# 4. إدارة المندوبين (إضافة/تعديل) (تم تحديث إضافة المندوب)
 # ----------------------------------------------------------------------------------
 elif current_menu == "إدارة المندوبين (إضافة/تعديل)":
     st.header("إدارة بيانات المندوبين")
@@ -361,7 +369,7 @@ elif current_menu == "إدارة المندوبين (إضافة/تعديل)":
             submitted = st.form_submit_button("إضافة المندوب", type="primary")
             if submitted:
                 if new_driver_id and new_name:
-                    add_driver(new_driver_id, new_name, new_bike_plate, new_whatsapp, new_notes, new_is_active)
+                    add_driver(new_driver_id, new_name, new_bike_plate, new_whatsapp, new_notes, new_is_active) # هذه الدالة تحتوي على التنبيه
                     st.rerun()
                 else:
                     st.error("يرجى إدخال ترقيم المندوب والاسم على الأقل.")
@@ -406,7 +414,7 @@ elif current_menu == "إدارة المندوبين (إضافة/تعديل)":
                 submitted_edit = st.form_submit_button("حفظ التعديلات", type="primary")
                 if submitted_edit:
                     update_driver_details(selected_id, edit_name, edit_bike_plate, edit_whatsapp, edit_notes, edit_is_active)
-                    st.session_state['search_result_id'] = None # مسح نتيجة البحث بعد الحفظ
+                    st.session_state['search_result_id'] = None 
                     st.rerun()
         else:
             st.info("يرجى استخدام شريط البحث أعلاه لتحديد المندوب المراد تعديله.")
@@ -420,7 +428,7 @@ elif current_menu == "إدارة المندوبين (إضافة/تعديل)":
             st.info("لا توجد بيانات لعرضها.")
 
 # ----------------------------------------------------------------------------------
-# 5. التقارير وسجل العمليات (تم تحديث سجل مندوب معين) ⬅️ تم إضافة خيار البحث
+# 5. التقارير وسجل العمليات (لم يتم تعديلها)
 # ----------------------------------------------------------------------------------
 elif current_menu == "التقارير وسجل العمليات":
     st.header("سجل الحركات المالية والتقارير")
@@ -505,7 +513,7 @@ elif current_menu == "التقارير وسجل العمليات":
 
 
 # ----------------------------------------------------------------------------------
-# 6. إعدادات التطبيق (الشعار)
+# 6. إعدادات التطبيق (الشعار) (تم إضافة التحديث)
 # ----------------------------------------------------------------------------------
 elif current_menu == "إعدادات التطبيق (الشعار)":
     st.header("تغيير شعار الشركة")
