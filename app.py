@@ -20,9 +20,12 @@ CONN_NAME = "gcp_service_account" # اسم الاتصال في secrets.toml
 # 🆕 دالة مساعدة لتشغيل صوت تنبيه
 def play_sound(sound_file):
     """يشغل ملف صوتي باستخدام HTML."""
+    # 1. تأكد من إنشاء مجلد static أولاً
+    os.makedirs("static", exist_ok=True)
+    
     full_path = f"static/{sound_file}" 
     try:
-        if os.makedirs("static", exist_ok=True) # تأكد من وجود مجلد static
+        # 2. الآن تحقق من وجود الملف داخل المجلد
         if os.path.exists(full_path):
             audio_html = f"""
             <audio autoplay="true">
