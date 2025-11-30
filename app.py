@@ -1,25 +1,28 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 from datetime import datetime
 import os
 import io
 
-# --- إعدادات التطبيق ---
-DEDUCTION_AMOUNT = 15.0  
-ADMIN_KEY = "jak2831" 
-IMAGE_PATH = "logo.png" 
+# 🆕 استيراد أداة الاتصال بـ Google Sheets
+from streamlit_gsheets import GSheetsConnection 
 
-# 🚨 التعديل الجديد للتخزين الثابت (استخدام مجلد app_data)
-DB_DIR = "app_data"
-DB_NAME = os.path.join(DB_DIR, "delivery_app.db")
-# ----------------------------------------------------
+# --- إعدادات التطبيق ---
+DEDUCTION_AMOUNT = 15.0  # المبلغ المخصوم لكل توصيلة (أوقية)
+ADMIN_KEY = "jak2831" # المفتاح السري للإدارة
+IMAGE_PATH = "logo.png" # اسم ملف الشعار الثابت
+
+# 🚨 إعدادات Google Sheets (يجب أن تتطابق مع ملفك ومفتاحك)
+SPREADSHEET_NAME = "Delivery_Data_DB" 
+CONN_NAME = "gcp_service_account" # اسم الاتصال في secrets.toml
+# -----------------------------
 
 # 🆕 دالة مساعدة لتشغيل صوت تنبيه
 def play_sound(sound_file):
     """يشغل ملف صوتي باستخدام HTML."""
     full_path = f"static/{sound_file}" 
     try:
+        if os.makedirs("static", exist_ok=True) # تأكد من وجود مجلد static
         if os.path.exists(full_path):
             audio_html = f"""
             <audio autoplay="true">
@@ -30,140 +33,256 @@ def play_sound(sound_file):
     except Exception:
         pass
 
-# --- دوال التعامل مع قاعدة البيانات ---
-# 🚨 تم تحديث init_db لإنشاء مجلد البيانات الجديد
-def init_db():
-    # التأكد من إنشاء المجلد app_data إذا لم يكن موجوداً
-    if not os.path.exists(DB_DIR):
-        os.makedirs(DB_DIR)
+# --- دوال التعامل مع Google Sheets ---
+
+# 🆕 دالة للحصول على الاتصال (يتم تخزينها مؤقتاً لتسريع الأداء)
+@st.cache_resource(ttl=3600) 
+def get_connection():
+    # التأكد من أن المفتاح السري موجود قبل المحاولة
+    if CONN_NAME not in st.secrets:
+        st.error(f"خطأ: مفتاح الاتصال '{CONN_NAME}' غير موجود في ملف secrets.toml.")
+        st.stop()
+    return st.connection(CONN_NAME, type=GSheetsConnection)
+
+# 🆕 دالة قراءة ورقة معينة
+@st.cache_data(ttl=5) # تحديث البيانات من Sheet كل 5 ثواني
+def get_sheet_data(sheet_name):
+    conn = get_connection()
+    df = conn.read(spreadsheet=SPREADSHEET_NAME, worksheet=sheet_name)
+    # تنظيف البيانات وتجهيزها
+    if df.empty:
+        # إذا كانت الورقة فارغة، أعد DataFrame فارغاً بالأعمدة الصحيحة
+        if sheet_name == "drivers":
+            return pd.DataFrame(columns=['driver_id', 'name', 'bike_plate', 'whatsapp', 'notes', 'is_active', 'balance'])
+        elif sheet_name == "transactions":
+            return pd.DataFrame(columns=['driver_name', 'amount', 'type', 'timestamp'])
+
+    # تحويل الأنواع الأساسية
+    if 'driver_id' in df.columns:
+        df['driver_id'] = df['driver_id'].astype(str)
+    if 'is_active' in df.columns:
+        df['is_active'] = df['is_active'].astype(bool)
+    if 'balance' in df.columns:
+        # محاولة تحويل الرصيد إلى رقم، واستبدال الأخطاء بصفر
+        df['balance'] = pd.to_numeric(df['balance'], errors='coerce').fillna(0.0) 
+    if 'amount' in df.columns:
+        df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0.0)
         
-    conn = sqlite3.connect(DB_NAME) 
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS drivers
-              (id INTEGER PRIMARY KEY AUTOINCREMENT, driver_id TEXT UNIQUE, name TEXT, bike_plate TEXT, whatsapp TEXT, notes TEXT, is_active BOOLEAN, balance REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS transactions
-              (id INTEGER PRIMARY KEY AUTOINCREMENT, driver_name TEXT, amount REAL, type TEXT, timestamp TEXT)''')
-    conn.commit()
-    conn.close()
+    return df
 
-# --- (بقية الدوال دون تغيير) ---
-
-def add_driver(driver_id, name, bike_plate, whatsapp, notes, is_active):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
+# 🚨 تم استبدال init_db بالتحقق من الاتصال
+def init_db():
     try:
-        c.execute("INSERT INTO drivers (driver_id, name, bike_plate, whatsapp, notes, is_active, balance) VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                  (driver_id, name, bike_plate, whatsapp, notes, is_active, 0.0))
-        conn.commit()
-        st.success(f"تمت إضافة المندوب '{name}' بنجاح! 🔔")
-        play_sound("success.mp3") 
-    except sqlite3.IntegrityError:
+        get_sheet_data("drivers")
+    except Exception as e:
+        st.error(f"خطأ في الاتصال بـ Google Sheets: الرجاء التأكد من اسم الملف '{SPREADSHEET_NAME}' ووجود ورقتي 'drivers' و 'transactions'.")
+        st.error(f"تفاصيل الخطأ: {e}")
+        st.stop()
+
+# 🆕 دالة لإضافة مندوب جديد (تكتب في Sheet)
+def add_driver(driver_id, name, bike_plate, whatsapp, notes, is_active):
+    drivers_df = get_sheet_data("drivers")
+    
+    # 2. التحقق من التكرار
+    if driver_id in drivers_df['driver_id'].values:
         st.error("رقم الترقيم (ID) هذا موجود مسبقاً. 🚨")
         play_sound("error.mp3") 
-    conn.close()
+        return
+        
+    # 3. إنشاء الصف الجديد
+    new_driver = pd.DataFrame([{
+        "driver_id": driver_id, 
+        "name": name, 
+        "bike_plate": bike_plate, 
+        "whatsapp": whatsapp, 
+        "notes": notes, 
+        "is_active": is_active, 
+        "balance": 0.0
+    }])
+    
+    # 4. دمج وحفظ البيانات الجديدة
+    updated_df = pd.concat([drivers_df, new_driver], ignore_index=True)
+    conn = get_connection()
+    conn.write(spreadsheet=SPREADSHEET_NAME, worksheet="drivers", data=updated_df)
+    
+    st.cache_data.clear() # مسح ذاكرة التخزين المؤقت للبيانات
+    st.success(f"تمت إضافة المندوب '{name}' بنجاح! 🔔")
+    play_sound("success.mp3") 
 
+# 🆕 دالة البحث (تقرأ من Sheet)
 def search_driver(search_term):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    query = "SELECT driver_id, name, balance, is_active FROM drivers WHERE driver_id=? OR whatsapp=?"
-    c.execute(query, (search_term, search_term))
-    result = c.fetchone()
-    conn.close()
-    if result:
-        return {"driver_id": result[0], "name": result[1], "balance": result[2], "is_active": result[3]}
+    drivers_df = get_sheet_data("drivers")
+    # البحث باستخدام driver_id أو whatsapp
+    result = drivers_df[
+        (drivers_df['driver_id'] == search_term) | 
+        (drivers_df['whatsapp'] == search_term)
+    ]
+    if not result.empty:
+        # إرجاع أول نتيجة مطابقة كقاموس
+        row = result.iloc[0]
+        return {"driver_id": row['driver_id'], "name": row['name'], "balance": float(row['balance']), "is_active": bool(row['is_active'])}
     return None
 
+# 🆕 دالة جلب معلومات المندوب (تقرأ من Sheet)
 def get_driver_info(driver_id):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT name, balance, is_active FROM drivers WHERE driver_id=?", (driver_id,))
-    result = c.fetchone()
-    conn.close()
-    if result:
-        return {"name": result[0], "balance": result[1], "is_active": result[2]} 
+    drivers_df = get_sheet_data("drivers")
+    result = drivers_df[drivers_df['driver_id'] == driver_id]
+    if not result.empty:
+        row = result.iloc[0]
+        return {"name": row['name'], "balance": float(row['balance']), "is_active": bool(row['is_active'])} 
     return None
 
+# 🆕 دالة تحديث التفاصيل (تكتب في Sheet)
 def update_driver_details(driver_id, name, bike_plate, whatsapp, notes, is_active):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("UPDATE drivers SET name=?, bike_plate=?, whatsapp=?, notes=?, is_active=? WHERE driver_id=?", 
-              (name, bike_plate, whatsapp, notes, is_active, driver_id))
-    conn.commit()
-    conn.close()
-    st.success(f"تم تحديث بيانات المندوب {name} بنجاح.")
+    conn = get_connection()
+    drivers_df = get_sheet_data("drivers")
+    
+    # تحديد الصف المراد تعديله
+    idx = drivers_df[drivers_df['driver_id'] == driver_id].index
+    
+    if not idx.empty:
+        # تطبيق التعديلات
+        drivers_df.loc[idx, 'name'] = name
+        drivers_df.loc[idx, 'bike_plate'] = bike_plate
+        drivers_df.loc[idx, 'whatsapp'] = whatsapp
+        drivers_df.loc[idx, 'notes'] = notes
+        drivers_df.loc[idx, 'is_active'] = is_active
+        
+        # إعادة كتابة الجدول بالكامل
+        conn.write(spreadsheet=SPREADSHEET_NAME, worksheet="drivers", data=drivers_df)
+        st.cache_data.clear()
+        st.success(f"تم تحديث بيانات المندوب {name} بنجاح.")
 
+# 🆕 دالة تحديث الرصيد (تكتب في Sheet)
 def update_balance(driver_id, amount, trans_type):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    info = get_driver_info(driver_id)
-    if not info: return 0.0
-    current_balance = info['balance']
-    name = info['name']
+    conn = get_connection()
+    
+    # 1. تحديث جدول drivers (تعديل الرصيد)
+    drivers_df = get_sheet_data("drivers")
+    
+    # التأكد من وجود المندوب
+    idx = drivers_df[drivers_df['driver_id'] == driver_id].index
+    if idx.empty: return 0.0
+
+    driver_row = drivers_df[drivers_df['driver_id'] == driver_id].iloc[0]
+    
+    # حساب الرصيد الجديد
+    current_balance = float(driver_row['balance'])
+    name = driver_row['name']
     new_balance = current_balance + amount
-    c.execute("UPDATE drivers SET balance=? WHERE driver_id=?", (new_balance, driver_id))
+    
+    # تعديل القيمة في DataFrame
+    drivers_df.loc[idx, 'balance'] = new_balance
+    
+    # إعادة كتابة جدول drivers بالكامل
+    conn.write(spreadsheet=SPREADSHEET_NAME, worksheet="drivers", data=drivers_df)
+    
+    # 2. تحديث جدول transactions (تسجيل الحركة)
+    transactions_df = get_sheet_data("transactions")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT INTO transactions (driver_name, amount, type, timestamp) VALUES (?, ?, ?, ?)",
-              (f"{name} (ID:{driver_id})", amount, trans_type, timestamp))
-    conn.commit()
-    conn.close()
+
+    new_transaction = pd.DataFrame([{
+        "driver_name": f"{name} (ID:{driver_id})", 
+        "amount": amount, 
+        "type": trans_type, 
+        "timestamp": timestamp
+    }])
+    
+    # دمج وكتابة سجل الحركات
+    updated_transactions = pd.concat([transactions_df, new_transaction], ignore_index=True)
+    conn.write(spreadsheet=SPREADSHEET_NAME, worksheet="transactions", data=updated_transactions)
+    
+    st.cache_data.clear() # مسح ذاكرة التخزين المؤقت بعد التحديث
     return new_balance
 
+# 🆕 دالة جلب عدد التوصيلات (تقرأ من Sheet)
 def get_deliveries_count_per_driver():
-    conn = sqlite3.connect(DB_NAME)
-    query = """
-    SELECT 
-        SUBSTR(driver_name, INSTR(driver_name, ':')+1, LENGTH(driver_name)-INSTR(driver_name, ':')-1) AS driver_id, 
-        COUNT(*) AS 'عدد التوصيلات'
-    FROM transactions
-    WHERE type='خصم توصيلة'
-    GROUP BY driver_id
-    """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    return df
+    transactions_df = get_sheet_data("transactions")
+    if transactions_df.empty: return pd.DataFrame(columns=['driver_id', 'عدد التوصيلات'])
 
+    # استخلاص الـ driver_id من driver_name
+    transactions_df['driver_id'] = transactions_df['driver_name'].str.extract(r'ID:(\w+)\)')
+    
+    deliveries_count = transactions_df[transactions_df['type'] == 'خصم توصيلة'] \
+        .groupby('driver_id') \
+        .size() \
+        .reset_index(name='عدد التوصيلات')
+        
+    return deliveries_count
+
+# 🆕 دالة جلب الإجماليات (تقرأ من Sheet)
 def get_totals():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    total_balance = c.execute("SELECT SUM(balance) FROM drivers").fetchone()[0] or 0.0
-    total_charged = c.execute("SELECT SUM(amount) FROM transactions WHERE type='شحن رصيد'").fetchone()[0] or 0.0
-    total_deducted_negative = c.execute("SELECT SUM(amount) FROM transactions WHERE type='خصم توصيلة'").fetchone()[0] or 0.0
+    drivers_df = get_sheet_data("drivers")
+    transactions_df = get_sheet_data("transactions")
+    
+    total_balance = drivers_df['balance'].sum()
+    
+    total_charged = transactions_df[transactions_df['type'] == 'شحن رصيد']['amount'].sum()
+    
+    total_deducted_negative = transactions_df[transactions_df['type'] == 'خصم توصيلة']['amount'].sum()
     total_deducted = abs(total_deducted_negative)
-    total_deliveries = c.execute("SELECT COUNT(*) FROM transactions WHERE type='خصم توصيلة'").fetchone()[0] or 0
-    conn.close()
+    total_deliveries = transactions_df[transactions_df['type'] == 'خصم توصيلة'].shape[0]
+    
     return total_balance, total_charged, total_deducted, total_deliveries
 
+# 🆕 دالة جلب السجل (تقرأ من Sheet)
 def get_history(driver_id=None):
-    conn = sqlite3.connect(DB_NAME)
+    transactions_df = get_sheet_data("transactions")
+    if transactions_df.empty:
+         return pd.DataFrame(columns=['المندوب', 'العملية', 'المبلغ', 'التوقيت'])
+         
+    # تنظيف الأعمدة
+    df_history = transactions_df.rename(columns={
+        'driver_name': 'المندوب', 
+        'amount': 'المبلغ', 
+        'type': 'العملية', 
+        'timestamp': 'التوقيت'
+    })
+    
     if driver_id:
-        query = f"SELECT type as 'العملية', amount as 'المبلغ', timestamp as 'التوقيت' FROM transactions WHERE driver_name LIKE '%ID:{driver_id}%' ORDER BY id DESC"
-    else:
-        query = "SELECT driver_name as 'المندوب', type as 'العملية', amount as 'المبلغ', timestamp as 'التوقيت' FROM transactions ORDER BY id DESC"
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    return df
+        # تصفية حسب ID
+        df_history = df_history[df_history['المندوب'].str.contains(f'ID:{driver_id}')]
+        # إزالة عمود المندوب في حالة التصفية
+        df_history = df_history.drop(columns=['المندوب'])
+        
+    return df_history.sort_values(by='التوقيت', ascending=False)
 
+# 🆕 دالة جلب تفاصيل الكل (تقرأ من Sheet)
 def get_all_drivers_details():
-    conn = sqlite3.connect(DB_NAME)
-    df = pd.read_sql_query("SELECT driver_id, name as 'الاسم', bike_plate as 'رقم اللوحة', whatsapp as 'واتساب', balance as 'الرصيد', is_active as 'الحالة', notes as 'ملاحظات' FROM drivers", conn)
-    conn.close()
+    df = get_sheet_data("drivers")
+    if df.empty: return pd.DataFrame()
+    
     deliveries_count_df = get_deliveries_count_per_driver()
+    
     if not deliveries_count_df.empty:
         df = pd.merge(df, deliveries_count_df, on='driver_id', how='left').fillna({'عدد التوصيلات': 0})
         df['عدد التوصيلات'] = df['عدد التوصيلات'].astype(int)
     else:
         df['عدد التوصيلات'] = 0
-    df['الحالة'] = df['الحالة'].apply(lambda x: 'مفعل' if x == 1 else 'معطل')
+        
+    df['الحالة'] = df['is_active'].apply(lambda x: 'مفعل' if x == True else 'معطل')
+    
+    df.rename(columns={
+        'driver_id': 'الترقيم',
+        'name': 'الاسم',
+        'bike_plate': 'رقم اللوحة',
+        'whatsapp': 'واتساب',
+        'balance': 'الرصيد',
+        'notes': 'ملاحظات'
+    }, inplace=True)
+    
     df.insert(0, 'ت', range(1, 1 + len(df)))
-    df.rename(columns={'driver_id': 'الترقيم'}, inplace=True)
+    
     cols = ['ت', 'الترقيم', 'الاسم', 'رقم اللوحة', 'واتساب', 'الرصيد', 'عدد التوصيلات', 'الحالة', 'ملاحظات']
     return df[cols]
 
-# --- واجهة التطبيق ---
+# ----------------------------------------------------------------------------------
+# 🌐 واجهة التطبيق (لا يوجد تغيير كبير هنا، فقط استخدام الدوال الجديدة)
+# ----------------------------------------------------------------------------------
 st.set_page_config(page_title="نظام إدارة التوصيل", layout="wide", page_icon="🚚")
-st.title("🚚 نظام رصيد المندوبين")
+st.title("🚚 نظام رصيد المندوبين (Google Sheets)")
 
-# التأكد من وجود قاعدة البيانات
+# التحقق من الاتصال وتهيئة التطبيق
 init_db()
 
 # تهيئة حالة الجلسة
@@ -299,44 +418,46 @@ elif current_menu == "واجهة العمليات (الإدارة)":
     selected_id = st.session_state['search_result_id']
     
     if selected_id:
-        st.subheader(f"2. تفاصيل ورصيد المندوب: {get_driver_info(selected_id)['name']}")
         info = get_driver_info(selected_id)
-        balance = info['balance']
-        is_active = info['is_active']
-        
-        status_text = "🟢 مفعل" if is_active else "🔴 معطل"
-        status_color = "green" if is_active else "red"
-        
-        st.markdown(f"**الرصيد الحالي:** **<span style='color:green; font-size: 1.5em;'>{balance:.2f} أوقية</span>** | **الحالة:** <span style='color:{status_color}; font-size: 1.2em;'>{status_text}</span>", unsafe_allow_html=True)
-        st.divider()
-        
-        if not is_active:
-             st.warning("تنبيه: هذا المندوب **معطل** ولا يمكنه إجراء عمليات توصيل حتى يتم تفعيله من قائمة الإدارة.")
+        if info:
+            st.subheader(f"2. تفاصيل ورصيد المندوب: {info['name']}")
+            balance = info['balance']
+            is_active = info['is_active']
+            
+            status_text = "🟢 مفعل" if is_active else "🔴 معطل"
+            status_color = "green" if is_active else "red"
+            
+            st.markdown(f"**الرصيد الحالي:** **<span style='color:green; font-size: 1.5em;'>{balance:.2f} أوقية</span>** | **الحالة:** <span style='color:{status_color}; font-size: 1.2em;'>{status_text}</span>", unsafe_allow_html=True)
+            st.divider()
+            
+            if not is_active:
+                 st.warning("تنبيه: هذا المندوب **معطل** ولا يمكنه إجراء عمليات توصيل حتى يتم تفعيله من قائمة الإدارة.")
 
-        tab1, tab2 = st.tabs(["✅ إتمام توصيلة", "💰 شحن رصيد"])
-        
-        with tab1:
-            st.markdown(f"سيتم خصم **{DEDUCTION_AMOUNT} أوقية** من الرصيد.")
-            if st.button("تسجيل توصيلة ناجحة", key="deduct_button", type="primary", disabled=not is_active):
-                if balance >= DEDUCTION_AMOUNT:
-                    new_bal = update_balance(selected_id, -DEDUCTION_AMOUNT, "خصم توصيلة")
-                    st.success(f"تم تسجيل التوصيلة! الرصيد المتبقي: {new_bal:.2f} أوقية 🔔")
+            tab1, tab2 = st.tabs(["✅ إتمام توصيلة", "💰 شحن رصيد"])
+            
+            with tab1:
+                st.markdown(f"سيتم خصم **{DEDUCTION_AMOUNT} أوقية** من الرصيد.")
+                if st.button("تسجيل توصيلة ناجحة", key="deduct_button", type="primary", disabled=not is_active):
+                    if balance >= DEDUCTION_AMOUNT:
+                        new_bal = update_balance(selected_id, -DEDUCTION_AMOUNT, "خصم توصيلة")
+                        st.success(f"تم تسجيل التوصيلة! الرصيد المتبقي: {new_bal:.2f} أوقية 🔔")
+                        play_sound("success.mp3") 
+                        st.session_state['search_result_id'] = None 
+                        st.rerun()
+                    else:
+                        st.error("عفواً، الرصيد غير كافي لإجراء التوصيلة. يرجى الشحن أولاً. 🚨")
+                        play_sound("error.mp3") 
+            
+            with tab2:
+                amount_to_add = st.number_input("المبلغ المراد شحنه (أوقية)", min_value=-99999.0, step=10.0, key="charge_amount")
+                if st.button("تأكيد الشحن", key="charge_button"):
+                    new_bal = update_balance(selected_id, amount_to_add, "شحن رصيد")
+                    st.success(f"تم الشحن بنجاح! الرصيد الجديد: {new_bal:.2f} أوقية 🔔")
                     play_sound("success.mp3") 
                     st.session_state['search_result_id'] = None 
                     st.rerun()
-                else:
-                    # 🚨 حالة نفاذ الرصيد
-                    st.error("عفواً، الرصيد غير كافي لإجراء التوصيلة. يرجى الشحن أولاً. 🚨")
-                    play_sound("error.mp3") 
-        
-        with tab2:
-            amount_to_add = st.number_input("المبلغ المراد شحنه (أوقية)", min_value=-99999.0, step=10.0, key="charge_amount")
-            if st.button("تأكيد الشحن", key="charge_button"):
-                new_bal = update_balance(selected_id, amount_to_add, "شحن رصيد")
-                st.success(f"تم الشحن بنجاح! الرصيد الجديد: {new_bal:.2f} أوقية 🔔")
-                play_sound("success.mp3") 
-                st.session_state['search_result_id'] = None 
-                st.rerun()
+        else:
+            st.error("حدث خطأ في جلب بيانات المندوب المحدد.")
     else:
         st.info("يرجى البحث عن المندوب باستخدام ترقيمه أو رقم الواتساب لتسجيل عملية.")
 
@@ -389,27 +510,31 @@ elif current_menu == "إدارة المندوبين (إضافة/تعديل)":
         selected_id = st.session_state['search_result_id']
         
         if selected_id:
-            conn = sqlite3.connect(DB_NAME)
-            info_db = conn.cursor().execute("SELECT name, bike_plate, whatsapp, notes, is_active FROM drivers WHERE driver_id=?", (selected_id,)).fetchone()
-            conn.close()
-            
-            st.markdown(f"**بيانات المندوب الحالي: {search_driver(selected_id)['name']}**")
-            
-            with st.form("edit_driver_form"):
-                col1_edit, col2_edit = st.columns(2)
-                with col1_edit:
-                    edit_name = st.text_input("الاسم", value=info_db[0])
-                    edit_bike_plate = st.text_input("رقم لوحة الدراجة", value=info_db[1] if info_db[1] else "")
-                    edit_whatsapp = st.text_input("رقم الواتساب", value=info_db[2] if info_db[2] else "")
-                with col2_edit:
-                    edit_notes = st.text_area("ملاحظات إضافية", value=info_db[3] if info_db[3] else "")
-                    edit_is_active = st.checkbox("حساب مفعل؟", value=info_db[4], help="عطّل لمنع إجراء أي عمليات.")
+            info = get_driver_info(selected_id)
+            if info:
+                st.markdown(f"**بيانات المندوب الحالي: {info['name']}**")
                 
-                submitted_edit = st.form_submit_button("حفظ التعديلات", type="primary")
-                if submitted_edit:
-                    update_driver_details(selected_id, edit_name, edit_bike_plate, edit_whatsapp, edit_notes, edit_is_active)
-                    st.session_state['search_result_id'] = None 
-                    st.rerun()
+                # جلب البيانات التفصيلية من DataFrame
+                drivers_df = get_sheet_data("drivers")
+                driver_row = drivers_df[drivers_df['الترقيم'] == selected_id].iloc[0]
+                
+                with st.form("edit_driver_form"):
+                    col1_edit, col2_edit = st.columns(2)
+                    with col1_edit:
+                        edit_name = st.text_input("الاسم", value=driver_row['name'])
+                        edit_bike_plate = st.text_input("رقم لوحة الدراجة", value=driver_row['bike_plate'] if driver_row['bike_plate'] else "")
+                        edit_whatsapp = st.text_input("رقم الواتساب", value=driver_row['whatsapp'] if driver_row['whatsapp'] else "")
+                    with col2_edit:
+                        edit_notes = st.text_area("ملاحظات إضافية", value=driver_row['notes'] if driver_row['notes'] else "")
+                        edit_is_active = st.checkbox("حساب مفعل؟", value=bool(driver_row['is_active']), help="عطّل لمنع إجراء أي عمليات.")
+                    
+                    submitted_edit = st.form_submit_button("حفظ التعديلات", type="primary")
+                    if submitted_edit:
+                        update_driver_details(selected_id, edit_name, edit_bike_plate, edit_whatsapp, edit_notes, edit_is_active)
+                        st.session_state['search_result_id'] = None 
+                        st.rerun()
+            else:
+                 st.error("حدث خطأ في جلب بيانات المندوب للتعديل.")
         else:
             st.info("يرجى استخدام شريط البحث أعلاه لتحديد المندوب المراد تعديله.")
 
@@ -487,21 +612,25 @@ elif current_menu == "التقارير وسجل العمليات":
         selected_id = st.session_state['search_result_id']
         
         if selected_id:
-            driver_name = search_driver(selected_id)['name']
-            st.markdown(f"**سجل حركات المندوب: {driver_name} (ID: {selected_id})**")
-            df = get_history(driver_id=selected_id)
-            
-            if not df.empty:
-                st.dataframe(df, use_container_width=True)
-                csv = df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="تحميل السجل كملف CSV",
-                    data=csv,
-                    file_name=f"سجل_المندوب_{selected_id}_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv",
-                )
+            driver_info = get_driver_info(selected_id)
+            if driver_info:
+                driver_name = driver_info['name']
+                st.markdown(f"**سجل حركات المندوب: {driver_name} (ID: {selected_id})**")
+                df = get_history(driver_id=selected_id)
+                
+                if not df.empty:
+                    st.dataframe(df, use_container_width=True)
+                    csv = df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="تحميل السجل كملف CSV",
+                        data=csv,
+                        file_name=f"سجل_المندوب_{selected_id}_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv",
+                    )
+                else:
+                    st.info("لا توجد حركات مسجلة لهذا المندوب.")
             else:
-                st.info("لا توجد حركات مسجلة لهذا المندوب.")
+                 st.error("تعذر جلب بيانات المندوب.")
         else:
             st.info("يرجى استخدام شريط البحث أعلاه لتحديد المندوب المطلوب.")
 
