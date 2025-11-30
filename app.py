@@ -6,20 +6,18 @@ import os
 import io
 
 # --- إعدادات التطبيق ---
-DEDUCTION_AMOUNT = 15.0  # المبلغ المخصوم لكل توصيلة (أوقية)
-ADMIN_KEY = "jak2831" # المفتاح السري للإدارة
-IMAGE_PATH = "logo.png" # اسم ملف الشعار الثابت
+DEDUCTION_AMOUNT = 15.0  
+ADMIN_KEY = "jak2831" 
+IMAGE_PATH = "logo.png" 
 
-# 🚨 التعديل الخاص بالتخزين الثابت (Persistent Storage)
-# يتم تخزين ملف قاعدة البيانات في مجلد ".streamlit" لضمان بقائه في Streamlit Cloud.
-DB_DIR = ".streamlit"
+# 🚨 التعديل الجديد للتخزين الثابت (استخدام مجلد app_data)
+DB_DIR = "app_data"
 DB_NAME = os.path.join(DB_DIR, "delivery_app.db")
 # ----------------------------------------------------
 
 # 🆕 دالة مساعدة لتشغيل صوت تنبيه
 def play_sound(sound_file):
     """يشغل ملف صوتي باستخدام HTML."""
-    # تأكد أن المسار صحيح (المجلد ثابت/اسم الملف)
     full_path = f"static/{sound_file}" 
     try:
         if os.path.exists(full_path):
@@ -30,13 +28,12 @@ def play_sound(sound_file):
             """
             st.markdown(audio_html, unsafe_allow_html=True)
     except Exception:
-        # تجاهل الخطأ في حال فشل تشغيل الصوت
         pass
 
 # --- دوال التعامل مع قاعدة البيانات ---
-# 🚨 تم تحديث init_db لإنشاء مجلد التخزين الثابت أولاً
+# 🚨 تم تحديث init_db لإنشاء مجلد البيانات الجديد
 def init_db():
-    # التأكد من إنشاء المجلد .streamlit إذا لم يكن موجوداً
+    # التأكد من إنشاء المجلد app_data إذا لم يكن موجوداً
     if not os.path.exists(DB_DIR):
         os.makedirs(DB_DIR)
         
@@ -49,7 +46,8 @@ def init_db():
     conn.commit()
     conn.close()
 
-# 🆕 تم تحديثها لتشغيل صوت النجاح/الخطأ
+# --- (بقية الدوال دون تغيير) ---
+
 def add_driver(driver_id, name, bike_plate, whatsapp, notes, is_active):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -65,7 +63,6 @@ def add_driver(driver_id, name, bike_plate, whatsapp, notes, is_active):
     conn.close()
 
 def search_driver(search_term):
-    """البحث عن مندوب بواسطة driver_id أو whatsapp"""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     query = "SELECT driver_id, name, balance, is_active FROM drivers WHERE driver_id=? OR whatsapp=?"
@@ -324,20 +321,20 @@ elif current_menu == "واجهة العمليات (الإدارة)":
                 if balance >= DEDUCTION_AMOUNT:
                     new_bal = update_balance(selected_id, -DEDUCTION_AMOUNT, "خصم توصيلة")
                     st.success(f"تم تسجيل التوصيلة! الرصيد المتبقي: {new_bal:.2f} أوقية 🔔")
-                    play_sound("success.mp3") # 🔔 صوت إتمام توصيلة
+                    play_sound("success.mp3") 
                     st.session_state['search_result_id'] = None 
                     st.rerun()
                 else:
                     # 🚨 حالة نفاذ الرصيد
                     st.error("عفواً، الرصيد غير كافي لإجراء التوصيلة. يرجى الشحن أولاً. 🚨")
-                    play_sound("error.mp3") # 🔔 صوت خطأ (نفاذ رصيد)
+                    play_sound("error.mp3") 
         
         with tab2:
             amount_to_add = st.number_input("المبلغ المراد شحنه (أوقية)", min_value=-99999.0, step=10.0, key="charge_amount")
             if st.button("تأكيد الشحن", key="charge_button"):
                 new_bal = update_balance(selected_id, amount_to_add, "شحن رصيد")
                 st.success(f"تم الشحن بنجاح! الرصيد الجديد: {new_bal:.2f} أوقية 🔔")
-                play_sound("success.mp3") # 🔔 صوت شحن رصيد
+                play_sound("success.mp3") 
                 st.session_state['search_result_id'] = None 
                 st.rerun()
     else:
