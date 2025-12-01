@@ -13,7 +13,7 @@ ADMIN_KEY = "jak2831" # المفتاح السري للإدارة
 IMAGE_PATH = "logo.png" # اسم ملف الشعار الثابت
 
 # 🚨 إعدادات Google Sheets (يجب أن تتطابق مع ملفك ومفتاحك)
-SPREADSHEET_NAME = "12SSDf-grKRkIhMd0sk4QMHZx8L7zzO1Ed0Ds8dQtzgg" 
+SPREADSHEET_NAME = "1TDc87MdWy-xWLjCFAnBgqVP8InJqOiovv25ap-jRP0I" 
 CONN_NAME = "gcp_service_account" # اسم الاتصال في secrets.toml
 # -----------------------------
 
